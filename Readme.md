@@ -10,5 +10,5 @@ be assembled with (compiled-in) NASM.
 
 I plan on extending Cesenta's object model to include byte-addressed typed arrays (shouldn't be hard).
 
-The only annoying thing is that V7's bytecode is difficult to disassemble (the one that comes with V7 doesn't work),
+The only annoying thing is that V7's bytecode is difficult to disassemble (the disassembler that comes with V7 doesn't work),
 so for now I'm using my own compiler.  I probably won't keep it.
