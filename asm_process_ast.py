@@ -152,6 +152,7 @@ def process(result):
   def encode_int32(i):
     c = struct.pack("i", i)
     return list(c)
+    
   def encode_double(i):
     c = struct.pack("d", i)
     return list(c)
@@ -242,19 +243,27 @@ def process(result):
     elif itype in ["jmp", "jz", "jnz"]:
       out.append(itype)
       val = node[1][0].value
+      
       if isnum(val):
-        out.append(int(val))
+        concat(out, encode_int32(int(val))[:4])
       else: #ReLink(loc, label, wid=4, rel=True):
         symbols.append(ReLink(len(out), len(out)-1, val))
         out.append(-1)
         out.append(-1)
         out.append(-1)
         out.append(-1)
-        
+    
     elif itype == "call":
       out.append(itype)
       out.append(int(node[1][0].value))
-    elif itype == "setvar":
+    elif itype == "getvar" or itype == "gv":
+      out.append(itype)
+      
+      if node[1][0].type == "NUM":
+        concat(out, encode_int32(node[1][0].value))
+      else:
+        concat(out, encode_int32(get_lit(node[1][0].value)))
+    elif itype == "setvar" or itype == "sv":
       arg = node[1][0].value
       out.append(itype)
       concat(out, encode_int32(get_lit(arg)))

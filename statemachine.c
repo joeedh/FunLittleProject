@@ -7,11 +7,18 @@
 #include "literal.h"
 #include "const.h"
 
+static unsigned char interrupt_helper[] = {
+  OP_DROP,
+  OP_RET
+};
+
 void SVM_Init(SimpleVM *vm, int stacksize) {
   memset(vm, 0, sizeof(SimpleVM));
   
   LT_Init(&vm->literals);
+  
   vm->breakpoint = BREAKPOINT_NONE;
+  vm->flag = VM_STRICT;
   
   if (stacksize > 0) {
     val_t *stack = MEM_malloc(stacksize*sizeof(val_t));
@@ -64,18 +71,33 @@ void SVM_Release(SimpleVM *vm) {
   setbit(flags, ZF, !d);\\
   setbit(flags, SF, d < 0);
 
+static void _debug_vm(SimpleVM *vm) {
+  int i;
+  doubleunion_t *sp = (doubleunion_t*) vm->regs[SP].p.ptr;
+  
+  fprintf(stderr, "\n========Stack=========\n");
+  
+  for (i=0; i<10; i++) {
+    fprintf(stderr, ".p.ptr:%p .p.type:%s .d:%lf\n", (void*)sp[i].p.ptr, SVM_TypeToStr(sp[i].d), sp[i].d);
+  }
+}
+
 int SVM_Step(SimpleVM *vm) {
   bytecode_t *code = (bytecode_t*) vm->regs[IP].p.ptr;
   uintptr_t flags = vm->regs[FLAGS].p.ptr;
   uintptr_t except = vm->regs[EXCEPT].p.ptr;
   
   doubleunion_t *sp = (doubleunion_t*) vm->regs[SP].p.ptr;
+  int use_strict = vm->flag & VM_STRICT;
   
   while (code != vm->breakpoint) {
     double d;
     unsigned int u;
     int i;
     int opcode = *code++;
+    
+    extern char *opcode2str(int code);
+    printf("0x%.5x: 0x%.2x      %s   ", (int)(code - vm->bcode - 1), opcode, opcode2str(opcode));
     
     switch (opcode) {
     case OP_DROP:
@@ -131,11 +153,18 @@ int SVM_Step(SimpleVM *vm) {
       break;
     case OP_PUSH_LIT: {
       int n=0;
+      doubleunion_t val;
       
       memcpy(&n, code, 4);
       code += 4;
       
-      (*--sp) = vm->literals.literals[n];
+      (*--sp) = val = vm->literals.literals[n];
+      printf(" %p %s %lf", (void*)val.p.ptr, SVM_TypeToStr((int)val.d), val.d);
+      
+      if (val.p.type == TYPE_STRING) {
+        fprintf(stdout, " \"%s\"",  (char*)val.p.ptr);
+      }
+      
       break;
     }
     case OP_NOT:
@@ -149,13 +178,20 @@ int SVM_Step(SimpleVM *vm) {
       break;
     case OP_POS: //result of Number(val)
       //XXX wrong?
-      sp->d = -((val_t)SVM_ValueOf(vm, sp->d));
+      sp->d = SVM_ValueOf(vm, sp->d);
       break;
-    case OP_ADD:
+    case OP_ADD: {//TODO: strings
+      val_t val = (val_t)SVM_ValueOf(vm, sp->d) + (val_t)SVM_ValueOf(vm, (sp+1)->d);
+      (++sp)->d = val;
+      
       break;
-    case OP_SUB:     
-      sp->d = (val_t)SVM_ValueOf(vm, sp->d) - (val_t)SVM_ValueOf(vm, (sp+1)->d);
+    }
+    case OP_SUB: {     
+      val_t val = (val_t)SVM_ValueOf(vm, sp->d) - (val_t)SVM_ValueOf(vm, (sp+1)->d);
+      (++sp)->d = val;
+      
       break;
+    }
     case OP_REM: { //modula % operator
       double a = SVM_ValueOf(vm, sp->d), b = SVM_ValueOf(vm, (sp+1)->d);
       a = ((int)(a / b))*b;
@@ -163,14 +199,28 @@ int SVM_Step(SimpleVM *vm) {
         a += b;
       }
       
+      (++sp)->d = a;
       break;
     }
-    case OP_MUL:
-      sp->d = (val_t)SVM_ValueOf(vm, sp->d) * (val_t)SVM_ValueOf(vm, (sp+1)->d);
+    case OP_MUL: {
+      val_t val = (val_t)SVM_ValueOf(vm, sp->d) * (val_t)SVM_ValueOf(vm, (sp+1)->d);
+      (++sp)->d = val;
+      
       break;
-    case OP_DIV:     
-      sp->d = (val_t)SVM_ValueOf(vm, sp->d) / (val_t)SVM_ValueOf(vm, (sp+1)->d);
+    }
+    case OP_DIV: {
+      val_t a = (val_t)SVM_ValueOf(vm, sp->d), b = (val_t)SVM_ValueOf(vm, (sp+1)->d);
+      
+      if (b == 0.0) {
+        a = JS_NAN;
+      } else {
+        a /= b;
+      }
+      
+      (++sp)->d = a;
+      
       break;
+    }
     case OP_URSHIFT: 
       break;
     case OP_LSHIFT:
@@ -198,10 +248,12 @@ int SVM_Step(SimpleVM *vm) {
           break;
       }
       
-      sp->d = int2val(a);
+      (++sp)->d = int2val(a);
       break;
     }
     case OP_EQ_EQ:
+      sp[1].d = sp[0].d == sp[1].d;
+      sp += 1;
       break;
     case OP_EQ:    
       break;
@@ -223,42 +275,160 @@ int SVM_Step(SimpleVM *vm) {
       break;
     case OP_IN:
       break;
-    case OP_GET:
+    case OP_GET: {
+      doubleunion_t propval = *sp;
+      doubleunion_t thisval = *(sp+1);
+      sp++;
+      
+      if (propval.p.type == TYPE_STRING) {
+        sp->d = SVM_GetField(vm, thisval.d, (char*)propval.p.ptr);
+      } else {
+        //XXX todo: throw exception here
+        fprintf(stderr, "bad property passed to OP_GET!\n");
+      }
       break;
+    }
     case OP_SET:
       break;
-    case OP_SET_VAR:
+    case OP_SET_VAR: {
+      int lit;
+      
+      memcpy(&lit, code, 4);
+      code += 4;
+      
+      /* let's just not support implicit global assignments at all
+         that would require adding a "mark as local scope" opcode
+         for variables
+        
+      if (use_strict && SVM_FindFieldI(vm, vm->scope, lit) < 0) {
+        fprintf(stderr, "global assignment error\n");
+        //XXX todo: raise exception;
+        break;
+      }*/
+      
+      SVM_SetFieldI(vm, vm->scope, lit, sp->d);
       break;
-    case OP_GET_VAR:
-      break;
+    }
     case OP_SAFE_GET_VAR:
+    case OP_GET_VAR: {
+      int lit;
+      val_t val;
+      
+      memcpy(&lit, code, 4);
+      code += 4;
+      
+      printf(" %d", lit);
+      
+      val = SVM_GetFieldI(vm, vm->scope, lit);
+      (--sp)->d = val;
+      
+      /* XXX need to check that variable exists in scope
+         and raise exception if it does not */
+      /*
+      if (SVM_FindFieldI(vm, vm->scope, lit) < 0) {
+      }
+      */
       break;
-    case OP_JMP:
-      break;
+    }
     case OP_JMP_TRUE:
-      break;
     case OP_JMP_FALSE:
-      break;
     case OP_JMP_TRUE_DROP:
+    case OP_JMP: {
+      int off, ok;
+      val_t val;
+      
+      memcpy(&off, code, 4);
+      
+      switch (opcode) {
+        case OP_JMP_TRUE:
+          ok = SVM_Truthy(sp->d);
+          break;
+        case OP_JMP_FALSE:
+          ok = !SVM_Truthy(sp->d);
+          break;
+        case OP_JMP_TRUE_DROP:
+          ok = SVM_Truthy(sp->d);
+          if (ok) {
+            sp++;
+          }
+          break;
+      }
+      
+      if (ok) {
+        code += off-1;
+      } else {
+        code += 4;
+      }
+      
       break;
-    case OP_JMP_IF_CONTINUE:
-      break;
+    }
+    //not supported for now
+    //case OP_JMP_IF_CONTINUE:
+    //  break;
     case OP_CREATE_OBJ:
+      (--sp)->d = SVM_MakeObject(vm, TYPE_OBJECT);
       break;
+    case MYOP_CREATE_FUNC: {
+      val_t func = SVM_MakeObject(vm, TYPE_FUNCTION);
+      SVMFunc *obj = (SVMFunc*) SVM_Val2Obj(func);
+      
+      memcpy(&obj->entry, code, 4);
+      code += 4;
+      memcpy(&obj->totarg, code, 2);
+      code += 2;
+      
+      (--sp)->d = func;
+      break;
+    }
     case OP_CREATE_ARR:
+      (--sp)->d = SVM_MakeObject(vm, TYPE_ARRAY);
       break;
     case OP_NEXT_PROP:
       break;
     case OP_FUNC_LIT:
       break;
     case OP_CALL:
+    case OP_NEW: {
+      int totarg = *code++;
+      SVMFunc *func;
+      doubleunion_t val, thisval;
+      
+      sp += totarg;
+      
+      val = *sp++;
+      thisval = *sp++;
+      
+      fprintf(stdout, "bleh: %p %d:%s", (void*)val.p.ptr, val.p.type, SVM_TypeToStr(val.d));
+      if (val.p.type == TYPE_STRING) {
+        fprintf(stdout, " \"%s\"\n",  (char*)val.p.ptr);
+      } else {
+        fprintf(stdout, "\n");
+      }
+      
+      if (val.p.type == TYPE_CDECL_FUNCTION) {
+        val_t ret;
+        
+        c_callback cb = (c_callback) val.p.ptr;
+        
+        //typedef val_t (*c_callback)(struct SimpleVM *vm, val_t dthis, int totarg, val_t *args);
+        ret = cb(vm, thisval.d, totarg, (val_t*)(sp-totarg+2));
+        (--sp)->d = ret;
+      } else if (val.p.type == TYPE_FUNCTION) {
+        func = (SVMFunc*) SVM_Val2Obj(val.d);
+        
+        (--sp)->p.ptr = (uint64_t) code + 1;
+        code = (bytecode_t*) func->entry;        
+      } else {
+        fprintf(stdout, "invalid function! %p %s\n", (void*)val.p.ptr, SVM_TypeToStr(val.d));
+      }
+      
       break;
-    case OP_NEW:
-      break;
+    }
     case OP_CHECK_CALL:
       break;
     case OP_RET:
       code = (bytecode_t*) sp->p.ptr;
+      sp++;
       break;
     case OP_DELETE:
       break;
@@ -297,9 +467,15 @@ int SVM_Step(SimpleVM *vm) {
       break;
     default:
       fprintf(stderr, "ERROR! bad opcode 0x%x\n", opcode);
+      _debug_vm(vm);
+      
+      goto exitloop;
     }
+    
+    printf("\n");
   }
   
+exitloop:
   vm->regs[IP].p.ptr = (uint64_t) code;
   vm->regs[SP].p.ptr = (uintptr_t) sp;
   vm->regs[FLAGS].p.ptr = flags;
@@ -332,11 +508,6 @@ int SVM_PopScope(struct SimpleVM *vm) {
 void SVM_FlagInterrupt(struct SimpleVM *vm, int interrupt, int arg) {
 }
 
-static unsigned char interrupt_helper[] = {
-  OP_DROP,
-  OP_RET
-};
-
 void SVM_Exception(struct SimpleVM *vm, int exc, val_t arg) {
   uintptr_t *tstack = (uintptr_t *)vm->regs[RTRYSTACK].p.ptr;
   
@@ -367,7 +538,7 @@ void SVM_Interrupt(struct SimpleVM *vm, val_t handler, int interrupt, val_t arg)
   doubleunion_t val = VAL2UNION(handler);
   
   if (val.p.type == TYPE_FUNCTION) {
-    SVMObject *ob = SVM_Val2Obj(handler);
+    SVMFunc *ob = (SVMFunc*)SVM_Val2Obj(handler);
     doubleunion_t *sp = (doubleunion_t*) vm->regs[SP].p.ptr;
     val_t scope;
     int i;
@@ -391,7 +562,7 @@ void SVM_Interrupt(struct SimpleVM *vm, val_t handler, int interrupt, val_t arg)
     SVM_SetField(vm, vm->scope, JS_THIS_STR, JS_UNDEFINED);
     
     //set instruction and stack pointers
-    vm->regs[IP].p.ptr = ob->func_entry;
+    vm->regs[IP].p.ptr = ob->entry;
     vm->regs[SP].p.ptr = (uint64_t) sp;
     
     //push stack return value
@@ -409,7 +580,7 @@ val_t SVM_FuncCall(struct SimpleVM *vm, val_t dval, val_t dthis, int totarg, val
   doubleunion_t val = VAL2UNION(dval);
   
   if (val.p.type == TYPE_FUNCTION) {
-    SVMObject *ob = SVM_Val2Obj(dval);
+    SVMFunc *ob = (SVMFunc*) SVM_Val2Obj(dval);
     doubleunion_t *sp = (doubleunion_t*) vm->regs[SP].p.ptr;
     int i;
     bytecode_t *bp;
@@ -433,7 +604,7 @@ val_t SVM_FuncCall(struct SimpleVM *vm, val_t dval, val_t dthis, int totarg, val
     }
     
     //set instruction and stack pointers
-    vm->regs[IP].p.ptr = ob->func_entry;
+    vm->regs[IP].p.ptr = ob->entry;
     vm->regs[SP].p.ptr = (uint64_t) sp;
     
     //run function bytecode

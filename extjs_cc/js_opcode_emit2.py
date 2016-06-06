@@ -137,7 +137,7 @@ class CodeEmitVisitor (NodeVisit2):
     self.do_indent = True
   
   def push_label(self, label):
-    self.labelstack.push(self.label)
+    self.labelstack.append(self.label)
     self.label = Label(label)
     self.out(label + ":\n")
     self.tlevel += 1
@@ -169,10 +169,42 @@ class CodeEmitVisitor (NodeVisit2):
     
     for c in node[1:]:
       traverse(c)
-    self.out("ret\n");
-    self.out("!endfunction\n");
+      
+    if not self.buf.strip().endswith("ret"):
+      self.out("ret\n");
     
     self.pop_label()
+    #XXX
+    #self.out("endfunction\n\n");
+    
+    #XXX need to deal with continuations, nested functions, etc.
+    #for now though. . .
+    
+    self.out(";add function to scope\n");
+    self.out("cf %s, %d\n" % (node.name, len(node[0])));
+    self.out("sv " + node.name + "\n");
+    self.out("drop\n\n");
+  
+  def value_traverse(self, node, traverse):
+    if type(node) in [IdentNode, StrLitNode, NumLitNode]:
+      self.out("push ")
+    traverse(node)
+    self.out("\n")
+    
+  def ReturnNode(self, node, traverse):
+    #find owner function node
+    p = node
+    while p != None and not isinstance(p, FunctionNode):
+      p = p.parent
+    
+    if p == None:
+      self.typespace.error("Return outside of function", node)
+      
+    if len(node) == 1:
+      self.value_traverse(node[0], traverse)
+    
+    self.out("ret\n");
+    pass
     
   def NumLitNode(self, node, traverse):
     self.out(node.val) #"$"+str(self.num_constpool.get(node.val))+"N ")
@@ -347,9 +379,7 @@ class CodeEmitVisitor (NodeVisit2):
     
     if node.op == ".":
       if type(node[0]) == IdentNode:
-        self.out("push " + node[0].val)
-        self.out("\n")
-        self.out("gv;\n")
+        self.out("gv " + node[0].val + "\n")
       else:      
         traverse(node[0])
         

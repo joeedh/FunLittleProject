@@ -6,6 +6,33 @@
 #include "statemachine.h"
 #include "literal.h"
 
+char *SVM_TypeToStr(val_t dval) {
+  doubleunion_t val;
+  static char tmp[64];
+  
+  val.d = dval;
+  switch (val.p.type) {
+    case TYPE_NUMBER:
+      return "number";
+    case TYPE_OBJECT:
+      return "object";
+    case TYPE_UNDEFINED:
+      return "undefined";
+    case TYPE_FUNCTION:
+      return "function";
+    case TYPE_CDECL_FUNCTION:
+      return "cdecl_function";
+    case TYPE_STRING:
+      return "string";
+    case TYPE_ARRAY:
+      return "array";
+    case TYPE_BYTE_ARRAY:
+      return "byte_array";
+    default:
+      sprintf(tmp, "(bad type code %d)", val.p.type);
+      return (char*)tmp;
+  }
+}
 void SVM_FreeObject(SVMObject *ob) {
   if (ob->fields)
     MEM_free(ob->fields);
@@ -160,6 +187,22 @@ val_t SVM_GetField(SimpleVM *vm, val_t val, char *name) {
   }
   
   int i = SVM_FindField(vm, SVM_Obj2Val(ob), name);
+  
+  if (i >= 0) {
+    return ob->fields[i];
+  }
+  
+  return JS_UNDEFINED;
+}
+
+val_t SVM_GetFieldI(SimpleVM *vm, val_t val, int name) {
+  SVMObject *ob = CAST_OBJECT(val);
+  
+  if (!val) {
+    return JS_UNDEFINED; //XXX raise error. . .handle primitive types? auto-boxing? or not?
+  }
+  
+  int i = SVM_FindFieldI(vm, SVM_Obj2Val(ob), name);
   
   if (i >= 0) {
     return ob->fields[i];

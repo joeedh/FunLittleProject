@@ -467,6 +467,10 @@ enum {
    * `( -- )`
    */
   OP_EXIT_CATCH,
+  
+  //takes two arguments: function entry point(int32), and number of arguments(int16)
+  MYOP_CREATE_FUNC,
+  OP_MAX
 };
 
 

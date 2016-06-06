@@ -18,8 +18,17 @@ if (a == 2) {
 }
 
 console.log(a, "yay!");
+var b=0, c=2;
 
-a(1, 2, 3);
+function func_test_a(arg1, arg2, arg3) {
+  if (b == 0) {
+    return c;
+  }
+  
+  return 0;
+}
+
+func_test_a(1, 2, 3);
 
 /*function a() {
   console.log("yay");

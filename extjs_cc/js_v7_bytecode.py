@@ -461,6 +461,10 @@ opdef = """
    * `( -- )`
    */
   OP_EXIT_CATCH,
+  
+  //takes two arguments: function entry point(int32), and number of arguments(int16)
+  //this is a custom opcode, it's not in v7
+  OP_CREATE_FUNC
 """
 
 mnomic_override = {
@@ -470,7 +474,8 @@ mnomic_override = {
   "THROW"      : "throw",
   "BREAK"      : "break",
   "CONTINUE"   : "continue",
-  "DELETE"     : "delete"
+  "DELETE"     : "delete",
+  "CREATE_FUNC" : "cf"
 }
 
 def parse_opdef():

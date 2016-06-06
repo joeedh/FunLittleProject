@@ -15,8 +15,15 @@ typedef struct SVMObject {
   val_t *fields;
   int *names;
   int totfield, size;
-  int func_entry;
 } SVMObject;
+
+typedef struct SVMFunc {
+  SVMObject head;
+  
+  int entry; //entry point in bytecode
+  int totarg; //number of arguments declared in code.  actual count may differ at runtime
+  val_t bound_scope; //for continuations
+} SVMFunc;
 
 /*NAN integer encoding
    nan       type                 value
@@ -32,13 +39,14 @@ enum {
   TYPE_FUNCTION,
   TYPE_CDECL_FUNCTION,
   TYPE_STRING,
-  TYPE_DOUBLE_ARRAY,
+  TYPE_ARRAY,
   TYPE_BYTE_ARRAY
 };
 
 struct SimpleVM;
 
 val_t SVM_MakeObject(struct SimpleVM *vm, int type);
+char *SVM_TypeToStr(val_t dval);
 
 /*frees SVMObject.  deconstructors starting with Free call MEM_free on 
   the passed in pointer.  ones with Release do not, they only free dependent
@@ -47,9 +55,13 @@ void SVM_FreeObject(SVMObject *ob);
 
 int SVM_FindField(struct SimpleVM *vm, val_t val, char *field);
 int SVM_FindFieldI(struct SimpleVM *vm, val_t val, int field);
+
 void SVM_SetField(struct SimpleVM *vm, val_t val, char *name, val_t setval);
 void SVM_SetFieldI(struct SimpleVM *vm, val_t val, int name, val_t setval);
+
 val_t SVM_GetField(struct SimpleVM *vm, val_t val, char *name);
+val_t SVM_GetFieldI(struct SimpleVM *vm, val_t val, int name);
+
 val_t SVM_FuncCall(struct SimpleVM *vm, val_t val, val_t dthis, int totarg, val_t *args);
 val_t SVM_SimpleObjCopy(struct SimpleVM *vm, val_t scope);
 
@@ -69,7 +81,7 @@ static int SVM_IsObj(val_t dval) {
   switch (val.p.type) {
     case TYPE_OBJECT:
     case TYPE_FUNCTION:
-    case TYPE_DOUBLE_ARRAY:
+    case TYPE_ARRAY:
     case TYPE_BYTE_ARRAY:
       return 1;
     default:

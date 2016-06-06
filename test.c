@@ -88,6 +88,7 @@ int main(int argc, char **argv) {
   bcode = read_literals(vm, image);
   
   vm->regs[IP].p.ptr = (uint64_t)bcode;
+  vm->bcode = bcode;
   
   //set up some globals
   vm->global = vm->scope = SVM_MakeObject(vm, TYPE_OBJECT);
@@ -95,6 +96,8 @@ int main(int argc, char **argv) {
   
   SVM_SetField(vm, vm->global, "console", console);
   SVM_SetField(vm, console, "log", SVM_MakeNativeFunc(vm, console_log));
+  
+  SVM_Step(vm);
   
   MEM_free(image);
   SVM_Release(vm);
